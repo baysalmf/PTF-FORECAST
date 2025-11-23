@@ -1,90 +1,141 @@
-import json
+import pandas as pd
 import requests
-import pandas as pd
-import pandas as pd
-import matplotlib.pyplot as plt
 from datetime import datetime
-import numpy as np
-import seaborn as sns
-from workalendar.europe import Turkey
+from dateutil.relativedelta import relativedelta
 
 pd.set_option('display.max_columns', None)
-pd.set_option('display.max_columns', None)
 
-username = ''# *** username is required
-password = ''# *** password is required
-start_date = '2023-10-28'#*** start date is required
-end_date = '2024-10-28'#*** end date is required
-url1 = f"https://giris.epias.com.tr/cas/v1/tickets?username={username}&password={password}"
-url2 = f"https://seffaflik.epias.com.tr/electricity-service/v1/markets/dam/data/mcp?username={username}&password={password}"
+username = ""
+password = ""
 
+start_date = "2024-10-28"
+end_date = "2025-11-22"
 
-def date_converter(date_string):
-    new_string = date_string + "T00:00:00+03:00"
-    return new_string
+CAS_URL = "https://giris.epias.com.tr/cas/v1/tickets"
+PTF_URL = "https://seffaflik.epias.com.tr/electricity-service/v1/markets/dam/data/mcp"
+CONSUMPTION_URL = "https://seffaflik.epias.com.tr/electricity-service/v1/consumption/data/realtime-consumption"
+KGUP_URL = "https://seffaflik.epias.com.tr/electricity-service/v1/generation/data/dpp"
 
 
-def data_tgt(username, password):
-    headers = {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'text/plain'
-    }
-    response = requests.request("POST", url1, headers=headers, timeout=40)
-
-    if response.status_code == 201:
-        tgt_key = response.text
-        return tgt_key
+def to_iso_tr(d):
+    return f"{d}T00:00:00+03:00"
 
 
-def data_mcp(start_date, end_date, tgt_key, username, password):
-    sd = date_converter(start_date)
-    ed = date_converter(end_date)
+def get_tgt():
+    r = requests.post(
+        CAS_URL,
+        data={"username": username, "password": password},
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "text/plain"},
+        timeout=40
+    )
+    if r.status_code != 201:
+        raise SystemExit(f"TGT alınamadı: {r.status_code}-{r.text}")
+    return r.headers.get("Location", "").rstrip("/").split("/")[-1]
 
-    payload = json.dumps({
-        'endDate': ed,
-        'startDate': sd
-    })
-    headers = {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'TGT': tgt_key
-    }
-    response = requests.post(url2, headers=headers, data=payload)
+def fetch_epias_data(url, start_date, end_date, tgt, label):
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
 
-    if response.status_code == 200:
-        df = pd.json_normalize(response.json()['items'])
-        df['date'] = pd.to_datetime(df['date'])
-        return df
-    else:
-        return response.text
+    part_start = start
+    all_data = []
 
+    while part_start <= end:
+        part_end = (part_start + relativedelta(months=3)) - relativedelta(days=1)
+        if part_end > end:
+            part_end = end
 
-tgt = data_tgt(username, password)
+        body = {
+            "startDate": to_iso_tr(part_start.strftime("%Y-%m-%d")),
+            "endDate": to_iso_tr(part_end.strftime("%Y-%m-%d"))
+        }
 
-df = data_mcp(start_date, end_date, tgt, username, password)
+        r = requests.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json", "Accept": "application/json", "TGT": tgt},
+            timeout=60
+        )
 
-df.drop(['hour', 'priceUsd', 'priceEur'], axis=1, inplace=True)
+        if r.status_code == 200:
+            items = r.json().get("items", [])
+            if items:
+                all_data.extend(items)
+                print(f"{label}: {part_start.date()} - {part_end.date()} arası {len(items)} kayıt çekildi.")
+            else:
+                print(f"{label}: {part_start.date()} - {part_end.date()} arası veri yok.")
+        else:
+            print(f"{label} Hata ({r.status_code}) → {r.text}")
 
+        part_start = part_end + relativedelta(days=1)
+
+    return pd.DataFrame(all_data) if all_data else pd.DataFrame()
+
+def fetch_kgup(start_date, end_date, tgt):
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    part_start = start
+    all_data = []
+
+    while part_start <= end:
+        part_end = (part_start + relativedelta(months=3)) - relativedelta(days=1)
+        if part_end > end:
+            part_end = end
+
+        body = {
+            "startDate": to_iso_tr(part_start.strftime("%Y-%m-%d")),
+            "endDate": to_iso_tr(part_end.strftime("%Y-%m-%d")),
+            "region": "TR1"
+        }
+
+        r = requests.post(
+            KGUP_URL,
+            json=body,
+            headers={"Content-Type": "application/json", "Accept": "application/json", "TGT": tgt},
+            timeout=60
+        )
+
+        if r.status_code == 200:
+            items = r.json().get("items", [])
+            if items:
+                all_data.extend(items)
+                print(f"KGÜP: {part_start.date()} - {part_end.date()} arası {len(items)} kayıt çekildi.")
+            else:
+                print(f"KGÜP: {part_start.date()} - {part_end.date()} arası veri yok.")
+        else:
+            print(f"KGÜP Hata ({r.status_code}) → {r.text}")
+
+        part_start = part_end + relativedelta(days=1)
+
+    return pd.DataFrame(all_data) if all_data else pd.DataFrame()
+
+tgt = get_tgt()
+
+df_ptf = fetch_epias_data(PTF_URL, start_date, end_date, tgt, "PTF")
+df_consumption = fetch_epias_data(CONSUMPTION_URL, start_date, end_date, tgt, "Tüketim")
+df_kgup = fetch_kgup(start_date, end_date, tgt)
+
+df_merged = df_ptf.merge(df_consumption, on="date", how="left").merge(df_kgup, on="date", how="left")
+
+df_merged.drop(['hour', 'priceUsd', 'priceEur', 'time_x', 'time_y', 'toplam'], axis=1, inplace=True)
+
+df_merged['date'] = pd.to_datetime(df_merged['date'])
 
 def create_date_features(dataframe):
-    dataframe['yıl'] = dataframe['date'].dt.year
     dataframe['ay'] = dataframe['date'].dt.month
     dataframe['gün'] = dataframe['date'].dt.day
     dataframe['saat'] = dataframe['date'].dt.hour
     dataframe['haftanıngünleri'] = dataframe['date'].dt.dayofweek
     dataframe['mevsim'] = dataframe['date'].dt.quarter
     dataframe['haftanınGünü'] = dataframe['date'].dt.day_name()
-    dataframe['yılıngünü'] = dataframe['date'].dt.dayofyear
     return dataframe
 
-
-create_date_features(df)
-
+create_date_features(df_merged)
 
 cal = Turkey()
 all_holidays = []
 
-for year in range(2022, 2024):
+for year in range(2022, 2025):
     holidays = cal.holidays(year)
     for date, name in holidays:
         all_holidays.append(date.isoformat())
@@ -169,8 +220,6 @@ from statsmodels.tsa.seasonal import seasonal_decompose
 import statsmodels.tsa.api as smt
 
 y = df['price']
-
-
 # Dickey-Fuller test:
 def test_stationarity(timeseries):
     rolmean = timeseries.rolling(window=24).mean()
@@ -276,7 +325,6 @@ plt.legend()
 plt.tight_layout()
 plt.grid(True)
 plt.show()
-
 
 
 
