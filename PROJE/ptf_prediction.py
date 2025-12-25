@@ -3,13 +3,11 @@ import requests
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-pd.set_option('display.max_columns', None)
+username = "muhammetfurkan.baysal@zorlu.com"
+password = "Zorlu.2025"
 
-username = ""
-password = ""
-
-start_date = "2024-10-28"
-end_date = "2025-11-22"
+start_date = "2025-01-01"
+end_date = "2025-12-24"
 
 CAS_URL = "https://giris.epias.com.tr/cas/v1/tickets"
 PTF_URL = "https://seffaflik.epias.com.tr/electricity-service/v1/markets/dam/data/mcp"
@@ -115,6 +113,18 @@ df_ptf = fetch_epias_data(PTF_URL, start_date, end_date, tgt, "PTF")
 df_consumption = fetch_epias_data(CONSUMPTION_URL, start_date, end_date, tgt, "Tüketim")
 df_kgup = fetch_kgup(start_date, end_date, tgt)
 
+"""
+
+df_ghı = pd.read_csv(r"C:\Users\muhammetfb\OneDrive\Masaüstü\POWER_Point_Hourly_GHI_2025.csv",
+    skiprows=lambda x: x < 9,
+    sep=",")
+
+df_temp = pd.read_csv(r"C:\Users\muhammetfb\OneDrive\Masaüstü\POWER_Point_Hourly.csv",
+    skiprows=lambda x: x < 9,
+    sep=",")
+
+"""
+
 df_merged = df_ptf.merge(df_consumption, on="date", how="left").merge(df_kgup, on="date", how="left")
 
 df_merged.drop(['hour', 'priceUsd', 'priceEur', 'time_x', 'time_y', 'toplam'], axis=1, inplace=True)
@@ -126,206 +136,270 @@ def create_date_features(dataframe):
     dataframe['gün'] = dataframe['date'].dt.day
     dataframe['saat'] = dataframe['date'].dt.hour
     dataframe['haftanıngünleri'] = dataframe['date'].dt.dayofweek
-    dataframe['mevsim'] = dataframe['date'].dt.quarter
     dataframe['haftanınGünü'] = dataframe['date'].dt.day_name()
     return dataframe
 
 create_date_features(df_merged)
 
-cal = Turkey()
-all_holidays = []
+import holidays
+import numpy as np
 
-for year in range(2022, 2025):
-    holidays = cal.holidays(year)
-    for date, name in holidays:
-        all_holidays.append(date.isoformat())
+tr_holidays = holidays.Turkey(years=[2025])
 
-all_holidays = pd.to_datetime(all_holidays).date
+holiday_dates = set(tr_holidays.keys())
 
-df['resmi_tatil'] = np.where(pd.to_datetime(df['date']).dt.date.isin(all_holidays), 0, 1)
+df_merged['resmi_tatil'] = np.where(
+    pd.to_datetime(df_merged['date']).dt.date.isin(holiday_dates),
+    1,
+    0)
 
-df.drop('haftanınGünü', axis=1, inplace=True)
-
-plt.figure(figsize=(14, 8))
-plt.plot(df['date'], df['price'], linewidth=0.6)
-plt.title('Saatlik PTF Grafiği')
-plt.xlabel('Tarih')
-plt.ylabel('Piyasa Takas Fiyatı (PTF)')
-plt.grid(False)
-plt.tight_layout()
-plt.show()
-
-fig, ax = plt.subplots()
-fig.set_size_inches(16, 6)
-sns.boxplot(x='saat', y='price', data=df, ax=ax)
-plt.title('Saatlik Periyotta PTF')
-plt.tight_layout()
-plt.show()
-
-fig, ax = plt.subplots()
-fig.set_size_inches((16, 6))
-sns.boxplot(x='ay', y='price', data=df, ax=ax)
-plt.title('Aylık Periyotta PTF')
-plt.tight_layout()
-plt.show()
-
-fig, ax = plt.subplots()
-fig.set_size_inches((16, 6))
-sns.boxplot(x='haftanıngünleri', y='price', data=df, ax=ax)
-plt.title('Haftalık periyotta PTF')
-plt.tight_layout()
-plt.show()
-
-sns.set(rc={'figure.figsize': (30, 20)})
-sns.lineplot(x=df.index, y='price', hue=df.yıl, data=df, color='black').set_title('PTF')
-plt.plot(df.price.rolling(24 * 30).mean(), alpha=1, color='red', label='Hareketli Ortalama 1-aylık')
-plt.plot(df.price.rolling(24 * 30 * 3).mean(), alpha=1, color='green', label='Hareketli Ortalama 3-aylık')
-plt.legend()
-plt.show()
-
-df2 = df.pivot_table(index=df['saat'], columns='haftanıngünleri', values='price', aggfunc='mean')
-df2.plot(figsize=(16, 6), title='Günlük Ortalama PTF')
-plt.tight_layout()
-plt.show()
-
-from statsmodels.tsa.seasonal import seasonal_decompose
-from pylab import rcParams
-
-result = seasonal_decompose(df['price'], period=48)
-rcParams['figure.figsize'] = 12, 8
-fig = result.plot()
-plt.show()
-
-from statsmodels.tsa.stattools import acf, pacf
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-
-# ACF
-
-rcParams['figure.figsize'] = 12, 4
-plot_acf(df['price'], lags=24)
-plt.tick_params(axis='both', labelsize=12)
-plt.show()
-
-#PCF
-
-rcParams['figure.figsize'] = 12, 4
-plot_pacf(df['price'], lags=24)
-plt.tick_params(axis='both', labelsize=12)
-plt.show()
-
-import statsmodels.api as sm
-from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from statsmodels.tsa.holtwinters import SimpleExpSmoothing
-from statsmodels.tsa.seasonal import seasonal_decompose
-import statsmodels.tsa.api as smt
-
-y = df['price']
-# Dickey-Fuller test:
-def test_stationarity(timeseries):
-    rolmean = timeseries.rolling(window=24).mean()
-    rolstd = timeseries.rolling(window=24).std()
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(timeseries, color='blue', label='Original', linewidth=0.8)
-    plt.plot(rolmean, color='red', label='Rolling Mean', linewidth=0.8)
-    plt.plot(rolstd, color='black', label='Rolling Std', linewidth=0.8)
-    plt.title('Rolling Mean & Standard Deviation')
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-
-
-test_stationarity(y)
-
-
-def is_stationary(y):
-    p_value = sm.tsa.stattools.adfuller(y)[1]
-
-    if p_value < 0.05:
-        print(F'Result : Stationary (H0: non-stationary, p_value {p_value:.10f})')
-
-    else:
-        print(F'Result: Non-Stationary (H0: non-stationary, p_value {p_value:.10f})')
-
-
-is_stationary(y)
-
+df_merged.drop('haftanınGünü', axis=1, inplace=True)
 
 # Model
+def add_lags(df, lag_map):
 
-import pmdarima as pm
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-from sklearn.metrics import mean_squared_error, mean_absolute_error
+    df = df.copy()
+    for col, lags in lag_map.items():
+        if col not in df.columns:
+            raise KeyError(f"Kolon bulunamadı: {col}. Mevcut kolonlar: {list(df.columns)}")
+        for lag in lags:
+            df[f"{col}_lag_{lag}"] = df[col].shift(lag)
+    return df
 
-df.drop(['yıl', 'saat', 'mevsim', 'yılıngünü'], axis=1, inplace=True)
+lag_map = {
+    "price": [1, 2, 3, 24, 48, 72, 168],
+    "consumption": [24, 168],
+    "ruzgar": [24],
+    "gunes": [24],
+    "dogalgaz": [24, 168],
+}
 
-train_size = int(len(df) * 0.95)
-train, test = df[:train_size], df[train_size:]
+df_merged = add_lags(df_merged, lag_map)
 
-exogenous_vars_train = train[['ay', 'gün', 'haftanıngünleri', 'resmi_tatil']]
-exogenous_vars_test = test[['ay', 'gün', 'haftanıngünleri', 'resmi_tatil']]
+lag_cols = [c for c in df_merged.columns if "_lag_" in c]
+df_merged = df_merged.dropna(subset=lag_cols).reset_index(drop=True)
 
-'''
-SARIMAX_model = pm.auto_arima(train['price'],
-                              exogenous=exogenous_vars_train,
-                              start_p=1,
-                              start_q=1,
-                              test='adf',
-                              max_p=3,
-                              max_q=3,
-                              start_P=0,
-                              start_Q=0,
-                              max_P=3,
-                              max_Q=3,
-                              m=24,
-                              seasonal=True,
-                              trace=True,
-                              error_action='ignore',
-                              suppress_warnings=True,
-                              stepwise=True)
+def add_ewm(df, col, spans):
+    df = df.copy()
+    for s in spans:
+        df[f"{col}_ewm_{s}"] = df[col].ewm(span=s, adjust=False).mean()
+    return df
 
-print(SARIMAX_model.summary())
-'''
+df_merged = add_ewm(df_merged, "price", spans=[24, 168])
 
-model = SARIMAX(train['price'],
-                exog=exogenous_vars_train,
-                order=(1, 0, 0),
-                seasonal_order=(2, 0, 1, 24),
-                enforce_stationarity=False,
-                enforce_invertibility=False)
+df_merged["sin_hour"] = np.sin(2 * np.pi * df_merged["saat"] / 24)
+df_merged["cos_hour"] = np.cos(2 * np.pi * df_merged["saat"] / 24)
 
-model_fit = model.fit(disp=False)
-print(model_fit.summary())
+df_merged["sin_month"] = np.sin(2 * np.pi * df_merged["ay"] / 12)
+df_merged["cos_month"] = np.cos(2 * np.pi * df_merged["ay"] / 12)
 
-predictions = model_fit.predict(start=test.index[0], end=test.index[-1], exog=exogenous_vars_test)
-predictions = np.where(predictions < 0, 0, predictions)
-predictions = np.where(predictions > 3000, 3000, predictions)
+df_merged["sin_week"] = np.sin(2 * np.pi * df_merged["haftanıngünleri"] / 7)
+df_merged["cos_week"] = np.cos(2 * np.pi * df_merged["haftanıngünleri"] / 7)
 
-true_values = test['price']
+df_merged["sin_day_of_month"] = np.sin(2 * np.pi * df_merged["gün"] / 31)
+df_merged["cos_day_of_month"] = np.cos(2 * np.pi * df_merged["gün"] / 31)
 
-mae = mean_absolute_error(true_values, predictions)
-mse = mean_squared_error(true_values, predictions)
-rmse = np.sqrt(mse)
+train_df = df_merged[df_merged["date"] < "2025-10-01"]
+test_df = df_merged[df_merged["date"] >= "2025-10-01"]
 
-print(f"Mean Absolute Error (MAE): {mae}")
-print(f"Mean Squared Error (MSE): {mse}")
-print(f"Root Mean Squared Error (RMSE): {rmse}")
+cols = [col for col in train_df.columns if col not in ['date', 'price']]
 
-comparison_df = pd.DataFrame({'Gerçek Değerler': true_values, 'Tahminler': predictions})
-print(comparison_df.tail(24))
+Y_train = train_df['price']
+X_train = train_df[cols]
 
-plt.figure(figsize=(10, 6))
-plt.plot(test.index, true_values, label='Gerçek Değerler', color='blue')
-plt.plot(test.index, predictions, label='Tahminler', color='red', linestyle='--')
+Y_test = test_df['price']
+X_test = test_df[cols]
 
-plt.title('Gerçek Değerler ve Tahminler Karşılaştırması')
-plt.xlabel('Tarih')
-plt.ylabel('Değer')
+import lightgbm as lgb
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+lgb_regressor = lgb.LGBMRegressor(device="gpu", random_state=42)
+
+param_grid = {
+    "num_leaves": [31, 63, 127],
+    "learning_rate": [0.01, 0.05, 0.1],
+    "max_depth": [-1, 8, 12],
+    "colsample_bytree": [0.8, 0.9, 1.0],
+    "subsample": [0.8, 0.9, 1.0],
+    "min_child_samples": [20, 50, 100],
+}
+
+tscv = TimeSeriesSplit(n_splits=3)
+
+grid_search = GridSearchCV(
+    estimator=lgb_regressor,
+    param_grid=param_grid,
+    cv=tscv,
+    scoring="neg_mean_absolute_error",
+    n_jobs=-1,
+    verbose=1
+)
+
+grid_search.fit(X_train, Y_train)
+
+best_model = grid_search.best_estimator_
+print("Best params:", grid_search.best_params_)
+print("Best CV MAE:", -grid_search.best_score_)
+
+y_pred = best_model.predict(X_test)
+
+mae = mean_absolute_error(Y_test, y_pred)
+rmse = np.sqrt(mean_squared_error(Y_test, y_pred))
+
+print("TEST MAE:", mae)
+print("TEST RMSE:", rmse)
+
+best_params = {
+    "colsample_bytree": 0.9,
+    "learning_rate": 0.1,
+    "max_depth": 8,
+    "min_child_samples": 100,
+    "num_leaves": 127,
+    "subsample": 0.8,
+    "random_state": 42,
+    "device": "gpu",
+    "n_estimators": 5000
+}
+
+import matplotlib.pyplot as plt
+
+df_test = test_df[["date"]].copy()
+df_test["date"] = pd.to_datetime(df_test["date"])
+df_test["actual"] = Y_test.values
+df_test["pred"] = y_pred
+
+daily = (
+    df_test
+    .set_index("date")[["actual", "pred"]]
+    .resample("D")
+    .mean()
+)
+
+plt.figure(figsize=(12,5))
+plt.plot(daily.index, daily["actual"], label="Actual", linewidth=2, color="black")
+plt.plot(daily.index, daily["pred"], label="Predicted", linewidth=2, color="tab:blue")
+plt.title("Daily Average Price: Actual vs Predicted")
+plt.ylabel("Price")
+plt.grid(alpha=0.3)
 plt.legend()
 plt.tight_layout()
-plt.grid(True)
 plt.show()
 
 
+plt.figure(figsize=(6,6))
+plt.scatter(df_test["actual"], df_test["pred"], alpha=0.25)
+plt.plot(
+    [df_test["actual"].min(), df_test["actual"].max()],
+    [df_test["actual"].min(), df_test["actual"].max()],
+    linestyle="--",
+    color="black"
+)
+plt.xlabel("Actual Price")
+plt.ylabel("Predicted Price")
+plt.title("Predicted vs Actual Prices")
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+df_test["hour"] = df_test["date"].dt.hour
+df_test["abs_error"] = (df_test["actual"] - df_test["pred"]).abs()
+
+hourly_mae = df_test.groupby("hour")["abs_error"].mean()
+
+plt.figure(figsize=(10,4))
+plt.bar(hourly_mae.index, hourly_mae.values)
+plt.xlabel("Hour of Day")
+plt.ylabel("MAE")
+plt.title("Mean Absolute Error by Hour")
+plt.grid(axis="y", alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+mae = mean_absolute_error(df_test["actual"], df_test["pred"])
+rmse = np.sqrt(mean_squared_error(df_test["actual"], df_test["pred"]))
+
+mape = np.mean(
+    np.abs((df_test["actual"] - df_test["pred"]) /
+           np.clip(np.abs(df_test["actual"]), 1e-6, None))
+) * 100
+
+metrics_df = pd.DataFrame({
+    "Metric": ["MAE", "RMSE", "MAPE (%)"],
+    "Value": [mae, rmse, mape]
+})
+
+print(metrics_df)
+
+feature_importance = pd.DataFrame({
+    "feature": X_train.columns,
+    "importance": best_model.feature_importances_
+}).sort_values(by="importance", ascending=False)
+
+feature_importance.head(15)
+top_n = 15
+
+plt.figure(figsize=(8,6))
+plt.barh(
+    feature_importance["feature"][:top_n][::-1],
+    feature_importance["importance"][:top_n][::-1]
+)
+plt.title("Top Feature Importances (LightGBM)")
+plt.xlabel("Importance")
+plt.tight_layout()
+plt.show()
+
+# Gelecek Tahmin
+
+feature_cols = ['consumption', 'dogalgaz', 'ruzgar', 'linyit', 'tasKomur', 'ithalKomur', 'fuelOil',
+                'jeotermal', 'barajli', 'nafta', 'biokutle', 'akarsu', 'gunes', 'diger', 'ay', 'gün',
+                'saat', 'haftanıngünleri', 'resmi_tatil', 'price_lag_1', 'price_lag_2', 'price_lag_3',
+                'price_lag_24', 'price_lag_48', 'price_lag_72', 'price_lag_168', 'consumption_lag_24',
+                'consumption_lag_168', 'ruzgar_lag_24', 'gunes_lag_24', 'dogalgaz_lag_24',
+                'dogalgaz_lag_168', 'price_ewm_24', 'price_ewm_168', 'sin_hour', 'cos_hour', 'sin_month',
+                'cos_month', 'sin_week', 'cos_week', 'sin_day_of_month', 'cos_day_of_month']
+
+price_lags = [1, 2, 3, 24, 48, 72, 168]
+
+df_future = pd.read_excel(r"C:\Users\muhammetfb\OneDrive\Masaüstü\tahmin.xlsx")
+
+df_future = df_future.drop(columns=["Toplam(MWh)"], errors="ignore")
+
+rename_map = {
+    "Tarih": "date",
+    "Doğalgaz": "dogalgaz",
+    "Rüzgar": "ruzgar",
+    "Linyit": "linyit",
+    "Taş Kömür": "tasKomur",
+    "İthal Kömür": "ithalKomur",
+    "Fueloil": "fuelOil",
+    "Jeotermal": "jeotermal",
+    "Barajlı": "barajli",
+    "Nafta": "nafta",
+    "Biyokütle": "biokutle",
+    "Akarsu": "akarsu",
+    "Gunes": "gunes",
+    "Diğer": "diger",
+    "Tüketim Miktarı(MWh)": "consumption",
+}
+df_future = df_future.rename(columns=rename_map)
+
+df_future["date"] = pd.to_datetime(df_future["date"])
+df_future["price"] = np.nan
+
+df_merged["date"] = pd.to_datetime(df_merged["date"], errors="coerce")
+if df_merged["date"].dt.tz is not None:
+    df_merged["date"] = df_merged["date"].dt.tz_localize(None)
+
+df_future = df_future.drop(columns=["Saat", "Toplam(MWh)"], errors="ignore")
+
+df_future["date"] = pd.to_datetime(df_future["date"], errors="coerce")
+
+if "price" not in df_future.columns:
+    df_future["price"] = np.nan
+
+df_future = df_future.reindex(columns=df_merged.columns, fill_value=np.nan)
+
+df_all = (pd.concat([df_merged, df_future], ignore_index=True).sort_values("date").reset_index(drop=True)
 
 
