@@ -2,6 +2,12 @@ import pandas as pd
 import requests
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+import lightgbm as lgb
+from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+import holidays
+import numpy as np
+import matplotlib.pyplot as plt
 
 username = "muhammetfurkan.baysal@zorlu.com"
 password = "Zorlu.2025"
@@ -14,10 +20,8 @@ PTF_URL = "https://seffaflik.epias.com.tr/electricity-service/v1/markets/dam/dat
 CONSUMPTION_URL = "https://seffaflik.epias.com.tr/electricity-service/v1/consumption/data/realtime-consumption"
 KGUP_URL = "https://seffaflik.epias.com.tr/electricity-service/v1/generation/data/dpp"
 
-
 def to_iso_tr(d):
     return f"{d}T00:00:00+03:00"
-
 
 def get_tgt():
     r = requests.post(
@@ -113,17 +117,9 @@ df_ptf = fetch_epias_data(PTF_URL, start_date, end_date, tgt, "PTF")
 df_consumption = fetch_epias_data(CONSUMPTION_URL, start_date, end_date, tgt, "Tüketim")
 df_kgup = fetch_kgup(start_date, end_date, tgt)
 
-"""
+# df_ghı = pd.read_csv(r"C:\Users\muhammetfb\OneDrive\Masaüstü\POWER_Point_Hourly_GHI_2025.csv",skiprows=lambda x: x < 9,sep=",")
 
-df_ghı = pd.read_csv(r"C:\Users\muhammetfb\OneDrive\Masaüstü\POWER_Point_Hourly_GHI_2025.csv",
-    skiprows=lambda x: x < 9,
-    sep=",")
-
-df_temp = pd.read_csv(r"C:\Users\muhammetfb\OneDrive\Masaüstü\POWER_Point_Hourly.csv",
-    skiprows=lambda x: x < 9,
-    sep=",")
-
-"""
+# df_temp = pd.read_csv(r"C:\Users\muhammetfb\OneDrive\Masaüstü\POWER_Point_Hourly.csv",skiprows=lambda x: x < 9,sep=",")
 
 df_merged = df_ptf.merge(df_consumption, on="date", how="left").merge(df_kgup, on="date", how="left")
 
@@ -140,9 +136,6 @@ def create_date_features(dataframe):
     return dataframe
 
 create_date_features(df_merged)
-
-import holidays
-import numpy as np
 
 tr_holidays = holidays.Turkey(years=[2025])
 
@@ -210,45 +203,32 @@ X_train = train_df[cols]
 Y_test = test_df['price']
 X_test = test_df[cols]
 
-import lightgbm as lgb
-from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-lgb_regressor = lgb.LGBMRegressor(device="gpu", random_state=42)
+# lgb_regressor = lgb.LGBMRegressor(device="gpu", random_state=42)
 
-param_grid = {
-    "num_leaves": [31, 63, 127],
-    "learning_rate": [0.01, 0.05, 0.1],
-    "max_depth": [-1, 8, 12],
-    "colsample_bytree": [0.8, 0.9, 1.0],
-    "subsample": [0.8, 0.9, 1.0],
-    "min_child_samples": [20, 50, 100],
-}
+# param_grid = {
+#    "num_leaves": [31, 63, 127],
+#    "learning_rate": [0.01, 0.05, 0.1],
+#    "max_depth": [-1, 8, 12],
+#    "colsample_bytree": [0.8, 0.9, 1.0],
+#    "subsample": [0.8, 0.9, 1.0],
+#    "min_child_samples": [20, 50, 100]}
 
-tscv = TimeSeriesSplit(n_splits=3)
+# tscv = TimeSeriesSplit(n_splits=3)
 
-grid_search = GridSearchCV(
-    estimator=lgb_regressor,
-    param_grid=param_grid,
-    cv=tscv,
-    scoring="neg_mean_absolute_error",
-    n_jobs=-1,
-    verbose=1
-)
+# grid_search = GridSearchCV(
+# estimator=lgb_regressor,
+# param_grid=param_grid,
+# cv=tscv,
+# scoring="neg_mean_absolute_error",
+# n_jobs=-1,
+# verbose=1)
 
-grid_search.fit(X_train, Y_train)
+# grid_search.fit(X_train, Y_train)
 
-best_model = grid_search.best_estimator_
-print("Best params:", grid_search.best_params_)
-print("Best CV MAE:", -grid_search.best_score_)
-
-y_pred = best_model.predict(X_test)
-
-mae = mean_absolute_error(Y_test, y_pred)
-rmse = np.sqrt(mean_squared_error(Y_test, y_pred))
-
-print("TEST MAE:", mae)
-print("TEST RMSE:", rmse)
+# best_model = grid_search.best_estimator_
+# print("Best params:", grid_search.best_params_)
+# print("Best CV MAE:", -grid_search.best_score_)
 
 best_params = {
     "colsample_bytree": 0.9,
@@ -262,7 +242,17 @@ best_params = {
     "n_estimators": 5000
 }
 
-import matplotlib.pyplot as plt
+model = lgb.LGBMRegressor(**best_params)
+
+model.fit(X_train, Y_train)
+
+y_pred = model.predict(X_test)
+
+mae = mean_absolute_error(Y_test, y_pred)
+rmse = np.sqrt(mean_squared_error(Y_test, y_pred))
+
+print("TEST MAE:", mae)
+print("TEST RMSE:", rmse)
 
 df_test = test_df[["date"]].copy()
 df_test["date"] = pd.to_datetime(df_test["date"])
@@ -285,7 +275,6 @@ plt.grid(alpha=0.3)
 plt.legend()
 plt.tight_layout()
 plt.show()
-
 
 plt.figure(figsize=(6,6))
 plt.scatter(df_test["actual"], df_test["pred"], alpha=0.25)
@@ -331,10 +320,13 @@ metrics_df = pd.DataFrame({
 
 print(metrics_df)
 
-feature_importance = pd.DataFrame({
-    "feature": X_train.columns,
-    "importance": best_model.feature_importances_
-}).sort_values(by="importance", ascending=False)
+feature_importance = (
+    pd.DataFrame({
+        "feature": X_train.columns,
+        "importance": model.feature_importances_
+    })
+    .sort_values(by="importance", ascending=False)
+)
 
 feature_importance.head(15)
 top_n = 15
@@ -349,21 +341,13 @@ plt.xlabel("Importance")
 plt.tight_layout()
 plt.show()
 
-# Gelecek Tahmin
-
-feature_cols = ['consumption', 'dogalgaz', 'ruzgar', 'linyit', 'tasKomur', 'ithalKomur', 'fuelOil',
-                'jeotermal', 'barajli', 'nafta', 'biokutle', 'akarsu', 'gunes', 'diger', 'ay', 'gün',
-                'saat', 'haftanıngünleri', 'resmi_tatil', 'price_lag_1', 'price_lag_2', 'price_lag_3',
-                'price_lag_24', 'price_lag_48', 'price_lag_72', 'price_lag_168', 'consumption_lag_24',
-                'consumption_lag_168', 'ruzgar_lag_24', 'gunes_lag_24', 'dogalgaz_lag_24',
-                'dogalgaz_lag_168', 'price_ewm_24', 'price_ewm_168', 'sin_hour', 'cos_hour', 'sin_month',
-                'cos_month', 'sin_week', 'cos_week', 'sin_day_of_month', 'cos_day_of_month']
-
-price_lags = [1, 2, 3, 24, 48, 72, 168]
+import pandas as pd
+import numpy as np
+import holidays
 
 df_future = pd.read_excel(r"C:\Users\muhammetfb\OneDrive\Masaüstü\tahmin.xlsx")
 
-df_future = df_future.drop(columns=["Toplam(MWh)"], errors="ignore")
+df_future = df_future.drop(columns=["Toplam(MWh)", "Saat"], errors="ignore")
 
 rename_map = {
     "Tarih": "date",
@@ -384,22 +368,83 @@ rename_map = {
 }
 df_future = df_future.rename(columns=rename_map)
 
-df_future["date"] = pd.to_datetime(df_future["date"])
+df_future["date"] = pd.to_datetime(df_future["date"], dayfirst=True, errors="coerce")
+
 df_future["price"] = np.nan
 
+df_merged = df_merged.copy()
 df_merged["date"] = pd.to_datetime(df_merged["date"], errors="coerce")
 if df_merged["date"].dt.tz is not None:
     df_merged["date"] = df_merged["date"].dt.tz_localize(None)
 
-df_future = df_future.drop(columns=["Saat", "Toplam(MWh)"], errors="ignore")
-
-df_future["date"] = pd.to_datetime(df_future["date"], errors="coerce")
-
-if "price" not in df_future.columns:
-    df_future["price"] = np.nan
+if df_future["date"].dt.tz is not None:
+    df_future["date"] = df_future["date"].dt.tz_localize(None)
 
 df_future = df_future.reindex(columns=df_merged.columns, fill_value=np.nan)
 
-df_all = (pd.concat([df_merged, df_future], ignore_index=True).sort_values("date").reset_index(drop=True)
+df_all = (
+    pd.concat([df_merged, df_future], ignore_index=True)
+      .sort_values("date")
+      .reset_index(drop=True)
+)
+
+dt = df_all["date"]
+df_all["ay"] = dt.dt.month
+df_all["gün"] = dt.dt.day
+df_all["saat"] = dt.dt.hour
+df_all["haftanıngünleri"] = dt.dt.dayofweek  # 0-6
+
+years = sorted(dt.dt.year.dropna().unique().tolist())
+tr_h = holidays.Turkey(years=years)
+holiday_dates = set(tr_h.keys())
+df_all["resmi_tatil"] = dt.dt.date.isin(holiday_dates).astype(int)
+
+df_all["sin_hour"] = np.sin(2*np.pi*df_all["saat"]/24)
+df_all["cos_hour"] = np.cos(2*np.pi*df_all["saat"]/24)
+
+df_all["sin_month"] = np.sin(2*np.pi*df_all["ay"]/12)
+df_all["cos_month"] = np.cos(2*np.pi*df_all["ay"]/12)
+
+df_all["sin_week"] = np.sin(2*np.pi*df_all["haftanıngünleri"]/7)
+df_all["cos_week"] = np.cos(2*np.pi*df_all["haftanıngünleri"]/7)
+
+df_all["sin_day_of_month"] = np.sin(2*np.pi*df_all["gün"]/31)
+df_all["cos_day_of_month"] = np.cos(2*np.pi*df_all["gün"]/31)
+
+df_all = add_lags(df_all, lag_map)
+df_all = add_ewm(df_all, "price", spans=[24, 168])
+
+future_idx = df_all.index[df_all["price"].isna()].tolist()
+
+for i in future_idx:
+    df_all = add_lags(df_all, lag_map)
+    df_all = add_ewm(df_all, "price", spans=[24, 168])
+
+    X_row = df_all.loc[[i], cols]
+
+    if X_row.isna().any().any():
+        missing = X_row.columns[X_row.isna().any()].tolist()
+        raise ValueError(
+            f"{df_all.loc[i,'date']} için eksik feature var: {missing}"
+        )
+    pred = float(model.predict(X_row)[0])
+    if pred < 0:
+        pred = 0
+    elif pred > 3400:
+        pred = 3400
+    df_all.at[i, "price"] = pred
+
+forecast_df = (
+    df_all.loc[future_idx, ["date", "price"]]
+    .rename(columns={"price": "ptf_tahmin"})
+)
+
+out_path = r"C:\Users\muhammetfb\OneDrive\Masaüstü\ptf_tahmin.xlsx"
+forecast_df.to_excel(out_path, index=False)
+
+print("Tahmin dosyası kaydedildi:", out_path)
+
+
+
 
 
