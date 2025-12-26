@@ -345,9 +345,7 @@ import pandas as pd
 import numpy as np
 import holidays
 
-df_future = pd.read_excel(r"C:\Users\muhammetfb\OneDrive\Masaüstü\tahmin.xlsx")
-
-df_future = df_future.drop(columns=["Toplam(MWh)", "Saat"], errors="ignore")
+df_future = pd.read_excel(r"C:\Users\muhammetfb\OneDrive\Masaüstü\forecast.xlsx")
 
 rename_map = {
     "Tarih": "date",
