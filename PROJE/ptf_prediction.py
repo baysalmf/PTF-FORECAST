@@ -9,8 +9,8 @@ import holidays
 import numpy as np
 import matplotlib.pyplot as plt
 
-username = ""
-password = ""
+username = "muhammetfurkan.baysal@zorlu.com"
+password = "Zorlu.2025"
 
 start_date = "2025-01-01"
 end_date = "2025-12-24"
@@ -341,11 +341,7 @@ plt.xlabel("Importance")
 plt.tight_layout()
 plt.show()
 
-import pandas as pd
-import numpy as np
-import holidays
-
-df_future = pd.read_excel(r"C:\Users\muhammetfb\OneDrive\Masaüstü\forecast.xlsx")
+df_future = pd.read_excel(r"C:\Users\muhammetfb\Desktop\forecast.xlsx")
 
 rename_map = {
     "Tarih": "date",
@@ -437,11 +433,10 @@ forecast_df = (
     .rename(columns={"price": "ptf_tahmin"})
 )
 
-out_path = r"C:\Users\muhammetfb\OneDrive\Masaüstü\ptf_tahmin.xlsx"
+out_path = r"C:\Users\muhammetfb\Desktop\ptf_tahmin.xlsx"
 forecast_df.to_excel(out_path, index=False)
 
 print("Tahmin dosyası kaydedildi:", out_path)
-
 
 
 
