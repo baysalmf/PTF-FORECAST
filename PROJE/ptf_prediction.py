@@ -9,8 +9,8 @@ import holidays
 import numpy as np
 import matplotlib.pyplot as plt
 
-username = "muhammetfurkan.baysal@zorlu.com"
-password = "Zorlu.2025"
+username = ""
+password = ""
 
 start_date = "2025-01-01"
 end_date = "2025-12-24"
