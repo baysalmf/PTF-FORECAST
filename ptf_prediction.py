@@ -504,6 +504,31 @@ def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def fill_price_return_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Tahmin döngüsünde NaN kalan return feature'larını güvenli doldurur."""
+    df = df.copy()
+    eps = 1e-6
+
+    if "price_return_1h" in df.columns:
+        prev_1 = df["price"].shift(1)
+        prev_2 = df["price"].shift(2)
+        safe_base_1h = prev_2.where(prev_2.abs() > eps, np.nan)
+        df["price_return_1h"] = ((prev_1 / safe_base_1h) - 1).replace([np.inf, -np.inf], np.nan)
+
+    if "price_return_24h" in df.columns:
+        prev_1 = df["price"].shift(1)
+        prev_25 = df["price"].shift(25)
+        safe_base_24h = prev_25.where(prev_25.abs() > eps, np.nan)
+        df["price_return_24h"] = ((prev_1 / safe_base_24h) - 1).replace([np.inf, -np.inf], np.nan)
+
+    # Gelecek saatlerde zorunlu feature boş kalırsa nötr etki için 0'a çek.
+    for c in ("price_return_1h", "price_return_24h"):
+        if c in df.columns:
+            df[c] = df[c].fillna(0.0)
+
+    return df
+
+
 def add_ewm(df: pd.DataFrame, col: str, spans: list[int]) -> pd.DataFrame:
     df = df.copy()
     for s in spans:
@@ -813,6 +838,7 @@ def main() -> int:
     for i in future_idx:
         df_all = add_lags(df_all, lag_map)
         df_all = add_rolling_features(df_all)
+        df_all = fill_price_return_features(df_all)
         df_all = add_ewm(df_all, "price", spans=[24, 168])
 
         X_row = df_all.loc[[i], cols]
