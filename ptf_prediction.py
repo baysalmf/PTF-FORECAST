@@ -67,7 +67,7 @@ GEN_COLS_TERMIK        = ["dogalgaz", "linyit", "tasKomur", "ithalKomur"]
 GEN_COLS_TUMÜ          = GEN_COLS_YENILENEBILIR + GEN_COLS_TERMIK + ["fuelOil", "nafta", "diger"]
 
 def _project_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent
 
 def _desktop_path() -> Path:
     return Path(r"C:\Users\User\Desktop")
@@ -113,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--log-target",
         action="store_true",
-        default=True,
+        default=False,
         help="Fiyatı log(price+1) ile dönüştürerek eğit (spike tahminini düzeltir)",
     )
     p.add_argument(
@@ -431,7 +431,6 @@ def create_date_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def add_generation_mix(df: pd.DataFrame) -> pd.DataFrame:
-
     df = df.copy()
     mevcut_yenilenebilir = [c for c in GEN_COLS_YENILENEBILIR if c in df.columns]
     mevcut_termik        = [c for c in GEN_COLS_TERMIK        if c in df.columns]
@@ -445,25 +444,10 @@ def add_generation_mix(df: pd.DataFrame) -> pd.DataFrame:
             df["yenilenebilir_oran"] = df[mevcut_yenilenebilir].sum(axis=1) / denom
         if mevcut_termik:
             df["termik_oran"] = df[mevcut_termik].sum(axis=1) / denom
-        if "consumption" in df.columns:
-            df["net_ithalat"] = df["consumption"] - df["toplam_uretim"]
 
-    return df
-
-def add_weather_derived(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    if "hissedilen_C" in df.columns:
-        df["hissedilen_C2"] = df["hissedilen_C"] ** 2
-    if "sicaklik_C" in df.columns:
-        df["sicaklik_lag24_delta"] = df["sicaklik_C"] - df["sicaklik_C"].shift(24)
-    if "gunes_radyasyon_Wm2" in df.columns and "bulutluluk_pct" in df.columns:
-        df["gunes_efektif"] = (
-            df["gunes_radyasyon_Wm2"] * (1 - df["bulutluluk_pct"] / 100)
-        )
     return df
 
 def add_holiday_proximity(df: pd.DataFrame, holiday_dates: set) -> pd.DataFrame:
-    """Tatil öncesi ve sonrası günleri işaretler — fiyat profili çok farklı."""
     df = df.copy()
     tatil_oncesi = {d - timedelta(days=1) for d in holiday_dates}
     tatil_sonrasi = {d + timedelta(days=1) for d in holiday_dates}
@@ -505,7 +489,6 @@ def add_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fill_price_return_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Tahmin döngüsünde NaN kalan return feature'larını güvenli doldurur."""
     df = df.copy()
     eps = 1e-6
 
@@ -521,7 +504,6 @@ def fill_price_return_features(df: pd.DataFrame) -> pd.DataFrame:
         safe_base_24h = prev_25.where(prev_25.abs() > eps, np.nan)
         df["price_return_24h"] = ((prev_1 / safe_base_24h) - 1).replace([np.inf, -np.inf], np.nan)
 
-    # Gelecek saatlerde zorunlu feature boş kalırsa nötr etki için 0'a çek.
     for c in ("price_return_1h", "price_return_24h"):
         if c in df.columns:
             df[c] = df[c].fillna(0.0)
@@ -533,6 +515,19 @@ def add_ewm(df: pd.DataFrame, col: str, spans: list[int]) -> pd.DataFrame:
     df = df.copy()
     for s in spans:
         df[f"{col}_ewm_{s}"] = df[col].ewm(span=s, adjust=False).mean()
+    return df
+
+
+def add_trig_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["sin_hour"]         = np.sin(2 * np.pi * df["saat"] / 24)
+    df["cos_hour"]         = np.cos(2 * np.pi * df["saat"] / 24)
+    df["sin_month"]        = np.sin(2 * np.pi * df["ay"] / 12)
+    df["cos_month"]        = np.cos(2 * np.pi * df["ay"] / 12)
+    df["sin_week"]         = np.sin(2 * np.pi * df["haftanıngünleri"] / 7)
+    df["cos_week"]         = np.cos(2 * np.pi * df["haftanıngünleri"] / 7)
+    df["sin_day_of_month"] = np.sin(2 * np.pi * df["gün"] / 31)
+    df["cos_day_of_month"] = np.cos(2 * np.pi * df["gün"] / 31)
     return df
 
 
@@ -600,7 +595,6 @@ def main() -> int:
     if not args.no_meteo:
         meteo_hist = get_meteo_for_epias_merged(args.start_date, args.end_date, args.meteo_lat, args.meteo_lon)
         df_merged  = merge_meteo_hourly(df_merged, meteo_hist)
-
     df_merged = create_date_features(df_merged)
 
     years_holiday = sorted(pd.to_datetime(df_merged["date"]).dt.year.dropna().unique().tolist())
@@ -610,37 +604,19 @@ def main() -> int:
     df_merged["resmi_tatil"] = np.where(
         pd.to_datetime(df_merged["date"]).dt.date.isin(holiday_dates), 1, 0
     )
-
     df_merged = add_holiday_proximity(df_merged, holiday_dates)
-
     df_merged = safe_drop_columns(df_merged, ["haftanınGünü"])
-
     df_merged = add_generation_mix(df_merged)
-
-    df_merged = add_weather_derived(df_merged)
+    df_merged = add_trig_features(df_merged)
 
     lag_map   = build_lag_map(df_merged)
     df_merged = add_lags(df_merged, lag_map)
-
     df_merged = add_rolling_features(df_merged)
 
     lag_and_rolling_cols = [c for c in df_merged.columns if "_lag_" in c or "_rolling_" in c]
     df_merged = df_merged.dropna(subset=lag_and_rolling_cols).reset_index(drop=True)
 
     df_merged = add_ewm(df_merged, "price", spans=[24, 168])
-
-    df_merged["sin_hour"]         = np.sin(2 * np.pi * df_merged["saat"] / 24)
-    df_merged["cos_hour"]         = np.cos(2 * np.pi * df_merged["saat"] / 24)
-    df_merged["sin_month"]        = np.sin(2 * np.pi * df_merged["ay"] / 12)
-    df_merged["cos_month"]        = np.cos(2 * np.pi * df_merged["ay"] / 12)
-    df_merged["sin_week"]         = np.sin(2 * np.pi * df_merged["haftanıngünleri"] / 7)
-    df_merged["cos_week"]         = np.cos(2 * np.pi * df_merged["haftanıngünleri"] / 7)
-    df_merged["sin_day_of_month"] = np.sin(2 * np.pi * df_merged["gün"] / 31)
-    df_merged["cos_day_of_month"] = np.cos(2 * np.pi * df_merged["gün"] / 31)
-
-    if args.log_target:
-        df_merged["price"] = np.log1p(df_merged["price"])
-        print("Log transform uygulandı: price = log(price + 1)")
 
     train_df = df_merged[df_merged["date"] < args.train_before]
     test_df  = df_merged[df_merged["date"] >= args.train_before]
@@ -681,12 +657,8 @@ def main() -> int:
 
     y_pred_raw = model.predict(X_test)
 
-    if args.log_target:
-        y_pred = np.expm1(y_pred_raw)
-        Y_test_orig = np.expm1(Y_test)
-    else:
-        y_pred      = y_pred_raw
-        Y_test_orig = Y_test
+    y_pred = y_pred_raw
+    Y_test_orig = Y_test
 
     mae  = mean_absolute_error(Y_test_orig, y_pred)
     rmse = np.sqrt(mean_squared_error(Y_test_orig, y_pred))
@@ -763,7 +735,6 @@ def main() -> int:
         plt.xlabel("Importance")
         plt.tight_layout()
         plt.show()
-
     forecast_path = args.forecast_input.expanduser().resolve()
     if not forecast_path.is_file():
         raise FileNotFoundError(f"Tahmin girdisi bulunamadi: {forecast_path}")
@@ -784,10 +755,10 @@ def main() -> int:
     df_future["date"]  = pd.to_datetime(df_future["date"], dayfirst=True, errors="coerce")
     df_future["price"] = np.nan
 
-    df_merged = df_merged.copy()
-    df_merged["date"] = pd.to_datetime(df_merged["date"], errors="coerce")
-    if df_merged["date"].dt.tz is not None:
-        df_merged["date"] = df_merged["date"].dt.tz_convert(METEO_TIMEZONE).dt.tz_localize(None)
+    df_merged_base = df_merged.copy()
+    df_merged_base["date"] = pd.to_datetime(df_merged_base["date"], errors="coerce")
+    if df_merged_base["date"].dt.tz is not None:
+        df_merged_base["date"] = df_merged_base["date"].dt.tz_convert(METEO_TIMEZONE).dt.tz_localize(None)
     if df_future["date"].dt.tz is not None:
         df_future["date"] = df_future["date"].dt.tz_convert(METEO_TIMEZONE).dt.tz_localize(None)
 
@@ -797,11 +768,13 @@ def main() -> int:
         if pd.notna(d_min) and pd.notna(d_max):
             meteo_f   = get_meteo_for_forecast_excel(d_min, d_max, args.meteo_lat, args.meteo_lon)
             df_future = merge_meteo_hourly(df_future, meteo_f)
-
-    df_future = df_future.reindex(columns=df_merged.columns, fill_value=np.nan)
+    raw_cols_in_merged = [c for c in df_merged_base.columns if c in df_future.columns or c == "price"]
+    for c in raw_cols_in_merged:
+        if c not in df_future.columns:
+            df_future[c] = np.nan
 
     df_all = (
-        pd.concat([df_merged, df_future], ignore_index=True)
+        pd.concat([df_merged_base, df_future], ignore_index=True)
         .sort_values("date")
         .reset_index(drop=True)
     )
@@ -818,21 +791,11 @@ def main() -> int:
     years     = sorted(dt.dt.year.dropna().unique().tolist())
     tr_h      = holidays.Turkey(years=years)
     hol_dates = set(tr_h.keys())
-    df_all["resmi_tatil"]      = dt.dt.date.isin(hol_dates).astype(int)
+    df_all["resmi_tatil"]  = dt.dt.date.isin(hol_dates).astype(int)
     df_all = add_holiday_proximity(df_all, hol_dates)
 
-    df_all["sin_hour"]         = np.sin(2 * np.pi * df_all["saat"] / 24)
-    df_all["cos_hour"]         = np.cos(2 * np.pi * df_all["saat"] / 24)
-    df_all["sin_month"]        = np.sin(2 * np.pi * df_all["ay"] / 12)
-    df_all["cos_month"]        = np.cos(2 * np.pi * df_all["ay"] / 12)
-    df_all["sin_week"]         = np.sin(2 * np.pi * df_all["haftanıngünleri"] / 7)
-    df_all["cos_week"]         = np.cos(2 * np.pi * df_all["haftanıngünleri"] / 7)
-    df_all["sin_day_of_month"] = np.sin(2 * np.pi * df_all["gün"] / 31)
-    df_all["cos_day_of_month"] = np.cos(2 * np.pi * df_all["gün"] / 31)
-
     df_all = add_generation_mix(df_all)
-    df_all = add_weather_derived(df_all)
-
+    df_all = add_trig_features(df_all)
     future_idx = df_all.index[df_all["price"].isna()].tolist()
 
     for i in future_idx:
@@ -847,19 +810,14 @@ def main() -> int:
             missing = X_row.columns[X_row.isna().any()].tolist()
             raise ValueError(f"{df_all.loc[i, 'date']} icin eksik feature: {missing}")
 
-        pred_raw = float(model.predict(X_row)[0])
-
-        if args.log_target:
-            pred = np.expm1(pred_raw)
-        else:
-            pred = pred_raw
+        pred = float(model.predict(X_row)[0])
 
         pred = float(np.clip(pred, 0, 4500))
-        df_all.at[i, "price"] = np.log1p(pred) if args.log_target else pred
+
+        df_all.at[i, "price"] = pred
 
     forecast_df = df_all.loc[future_idx, ["date", "price"]].copy()
-    if args.log_target:
-        forecast_df["price"] = np.expm1(forecast_df["price"])
+
     forecast_df = forecast_df.rename(columns={"price": "ptf_tahmin"})
 
     out_path = args.output.expanduser().resolve()
@@ -874,7 +832,7 @@ def main() -> int:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             dbg = _desktop_path() / f"PTF_DEBUG_{stamp}"
         dbg.mkdir(parents=True, exist_ok=True)
-        df_merged.to_excel(dbg / "df_merged.xlsx", index=False)
+        df_merged_base.to_excel(dbg / "df_merged.xlsx", index=False)
         df_future.to_excel(dbg / "df_future.xlsx", index=False)
         df_all.to_excel(dbg / "df_all.xlsx", index=False)
         forecast_df.to_excel(dbg / "forecast_df.xlsx", index=False)
